@@ -58,13 +58,22 @@ const HotCornerIndicator = new Lang.Class({
     },
 
     // overrides default implementation from PanelMenu.Button
-    _onButtonPress: function(actor, event) {
-        let button = event.get_button();
-        if (button == Gdk.BUTTON_PRIMARY && Main.overview.shouldToggleByCornerOrButton()) {
-            Main.overview.toggleWindows();
-        } else if (button == Gdk.BUTTON_SECONDARY) {
+    _onEvent: function(actor, event) {
+        if (!this.menu)
+            return Clutter.EVENT_PROPAGATE;
+
+        if (event.type() == Clutter.EventType.BUTTON_PRESS) {
+            let button = event.get_button();
+            if (button == Gdk.BUTTON_PRIMARY) {
+                Main.overview.toggleApps();
+            } else if (button == Gdk.BUTTON_SECONDARY) {
+                this.menu.toggle();
+            }
+        } else if (event.type() == Clutter.EventType.TOUCH_BEGIN) {
             this.menu.toggle();
         }
+
+        return Clutter.EVENT_PROPAGATE;
     },
 
     _syncHover: function() {
