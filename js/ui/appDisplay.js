@@ -31,6 +31,7 @@ const Tweener = imports.ui.tweener;
 const Workspace = imports.ui.workspace;
 const Params = imports.misc.params;
 const Util = imports.misc.util;
+const MessageTray = imports.ui.messageTray;
 
 const MAX_APPLICATION_WORK_MILLIS = 75;
 const MENU_POPUP_TIMEOUT = 600;
@@ -1820,15 +1821,100 @@ const AppFolderPopup = new Lang.Class({
 });
 Signals.addSignalMethods(AppFolderPopup.prototype);
 
+// for source actor, expected source interface
+// - 'count-updated' signal, no parameters
+// - 'icon-updated' signal, no parameters
+// - createIcon(size) function -> actor
+// - countVisible getter -> boolean
+// - count getter -> number
+const AppIconSource = new Lang.Class({
+    Name: 'AppIconSource',
+
+    _init: function(appIcon) {
+        this._appIcon = appIcon;
+        this._notificationSourceSignalIds = [];
+        this._notificationSource = null;
+
+        let daemon = Main.notificationDaemon.gtk;
+        daemon.connect('new-gtk-notification-source', Lang.bind(this, this._onNewGtkNotificationSource));
+        let id = this._desktoplessAppId(this._appIcon.app.get_id());
+        this._onNewGtkNotificationSource(daemon, id, daemon.getSourceFor(id));
+    },
+
+    createIcon: function(iconSize) {
+        return this._appIcon.app.create_icon_texture(iconSize);
+    },
+
+    get count() {
+        if (this._notificationSource)
+            return this._notificationSource.count;
+        return 0;
+    },
+
+    get countVisible() {
+        return this.count > 0;
+    },
+
+    _desktoplessAppId: function(appId) {
+        if (appId.endsWith('.desktop'))
+            return appId.substring(0, appId.length - '.desktop'.length);
+        return appId;
+    },
+
+    _onNewGtkNotificationSource: function(daemon, appId, source) {
+        let thisAppId = this._desktoplessAppId(this._appIcon.app.get_id());
+        let sourceAppId = this._desktoplessAppId(appId);
+
+        if (thisAppId != sourceAppId)
+            return;
+
+        if (this._notificationSource) {
+            for (let idx in this._notificationSourceSignalIds) {
+                let signalId = this._notificationSourceSignalIds[idx];
+                this._notificationSource.disconnect(signalId);
+            }
+
+            this._notificationSourceSignalIds = [];
+            this._notificationSource = null;
+        }
+
+        let signals = ['count-updated', 'icon-updated'];
+
+        if (source) {
+            this._notificationSource = source;
+            let destroySignalId = this._notificationSource.connect('destroy', Lang.bind(this, function() {
+                this._notificationSourceSignalIds = [];
+                this._notificationSource = null;
+            }));
+            this._notificationSourceSignalIds.push(destroySignalId);
+
+            for (let idx in signals) {
+                let signalName = signals[idx];
+                let signalId = this._notificationSource.connect(signalName, Lang.bind(this, function() {
+                    this.emit(signalName);
+                }));
+                this._notificationSourceSignalIds.push(signalId);
+            }
+        }
+        for (let idx in signals)
+            this.emit(signals[idx]);
+    },
+
+});
+Signals.addSignalMethods(AppIconSource.prototype);
+
 const AppIcon = new Lang.Class({
     Name: 'AppIcon',
     Extends: ViewIcon,
 
     _init : function(app, iconParams, params) {
         this.app = app;
+        this._iconSource = new AppIconSource(this);
+        this._sourceActor = null;
         this._name = this.app.get_name();
 
         iconParams = Params.parse(iconParams, { createIcon: Lang.bind(this, this._createIcon),
+                                                createExtraIcons: Lang.bind(this, this._createExtraIcons),
                                                 editableLabel: true,
                                                 shadowAbove: true },
                                   true);
@@ -1852,6 +1938,12 @@ const AppIcon = new Lang.Class({
 
     _createIcon: function(iconSize) {
         return this.app.create_icon_texture(iconSize);
+    },
+
+    _createExtraIcons: function(iconSize) {
+        this._sourceActor = new MessageTray.SourceActor(this._iconSource, iconSize);
+        this._sourceActor.setIcon(new St.Bin());
+        return [this._sourceActor.actor];
     },
 
     _onStateChanged: function() {
