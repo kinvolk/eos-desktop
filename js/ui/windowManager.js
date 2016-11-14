@@ -1960,12 +1960,11 @@ const CodingManager = new Lang.Class({
         let session = this._getSession(actorApp);
 
         button.connect('clicked', Lang.bind(this, this._switchToBuilder, session));
-        let positionChangedId = window.connect('position-changed', Lang.bind(this, this._windowAppPositionChanged, session));
-        let sizeChangedId = window.connect('size-changed', Lang.bind(this, this._windowAppSizeChanged, session));
-        let windowsRestackedId = Main.overview.connect('windows-restacked', Lang.bind(this, this._windowAppRestacked, session));
-        session.positionChangedIdApp = positionChangedId;
-        session.sizeChangedIdApp = sizeChangedId;
-        session.windowsRestackedId = windowsRestackedId;
+        session.positionChangedIdApp = window.connect('position-changed', Lang.bind(this, this._windowAppPositionChanged, session));
+        session.sizeChangedIdApp = window.connect('size-changed', Lang.bind(this, this._windowAppSizeChanged, session));
+        session.windowsRestackedId = Main.overview.connect('windows-restacked', Lang.bind(this, this._windowAppRestacked, session));
+        session.windowMinimizedId = global.window_manager.connect('minimize', Lang.bind(this, this._windowMinimized, session));
+        session.windowUnminimizedId = global.window_manager.connect('unminimize', Lang.bind(this, this._windowUnminimized, session));
     },
 
     addSwitcherToApp: function(actorBuilder, windowApp) {
@@ -1995,6 +1994,15 @@ const CodingManager = new Lang.Class({
             Main.overview.disconnect(session.windowsRestackedId);
             session.windowsRestackedId = 0;
         }
+        if (session.windowMinimizedId !== 0) {
+            global.window_manager.disconnect(session.windowMinimizedId);
+            session.windowMinimizedId = 0;
+        }
+        if (session.windowUnminimizedId !== 0) {
+            global.window_manager.disconnect(session.windowUnminimizedId);
+            session.windowUnminimizedId = 0;
+        }
+
         Main.layoutManager.removeChrome(session.buttonApp);
         session.buttonApp.destroy();
         session.actorApp = null;
@@ -2191,6 +2199,42 @@ const CodingManager = new Lang.Class({
                                                        rect.height);
     },
 
+    _windowMinimized: function(shellwm, actor, session) {
+        // take the actor that we minimized and emit a minimized
+        // signal for it, though setting a flag internally so that
+        // we don't re-enter this signal handler.
+        if (this._processingWindowMinimized === actor) {
+            this._processingWindowMinimized = null;
+            return;
+        }
+
+        if (actor === session.actorApp && session.actorBuilder) {
+            this._processingWindowMinimized = session.actorBuilder;
+            session.actorBuilder.meta_window.minimize();
+        } else if (actor === session.actorBuilder && session.actorApp) {
+            this._processingWindowMinimized = session.actorApp;
+            session.actorApp.meta_window.minimize();
+        }
+    },
+
+    _windowUnminimized: function(shellwm, actor, session) {
+        // take the actor that we minimized and emit a minimized
+        // signal for it, though setting a flag internally so that
+        // we don't re-enter this signal handler.
+        if (this._processingWindowUnminimized === actor) {
+            this._processingWindowUnminimized = null;
+            return;
+        }
+
+        if (actor === session.actorApp && session.actorBuilder) {
+            this._processingWindowUnminimized = session.actorBuilder;
+            session.actorBuilder.meta_window.unminimize();
+        } else if (actor === session.actorBuilder && session.actorApp) {
+            this._processingWindowUnminimized = session.actorApp;
+            session.actorApp.meta_window.unminimize();
+        }
+    },
+
     _windowAppRestacked : function(overview, stackIndices, session) {
         let focusedWindow = global.display.get_focus_window();
         if (!focusedWindow)
@@ -2335,11 +2379,16 @@ const CodingManager = new Lang.Class({
         });
 
         /* Gently fade the window in, this will paper over
-         * any artifacts from shadows and the like */
+         * any artifacts from shadows and the like
+         *
+         * Note: The animation time is reduced here - this
+         * is intention. It is just to prevent initial
+         * "double shadows" when rotating between windows.
+         */
         Tweener.addTween(dst, {
-                    opacity: 255,
-                    time: WINDOW_ANIMATION_TIME * 4,
-                    transition: 'linear'
+            opacity: 255,
+            time: WINDOW_ANIMATION_TIME,
+            transition: 'linear'
         });
     },
 
